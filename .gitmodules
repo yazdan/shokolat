@@ -1,0 +1,3 @@
+[submodule "vendor/src/github.com/elazarl/goproxy"]
+	path = vendor/src/github.com/elazarl/goproxy
+	url = http://github.com/elazarl/goproxy
