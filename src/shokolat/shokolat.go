@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"github.com/elazarl/goproxy"
+	"github.com/yazdan/goproxy"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -12,7 +12,17 @@ import (
 	"regexp"
 	"bufio"
 	"strings"
+	"io"
 )
+
+
+
+type readCloser struct {
+    io.Reader
+    io.Closer
+
+}
+
 
 var (
 	StartBodyTagMatcher = regexp.MustCompile(`(?i:<body.*>)`)
@@ -50,7 +60,8 @@ func GetRegexlist(filename string) ([]*regexp.Regexp, error) {
 
 func main() {
 	verbose := flag.Bool("v", false, "should every proxy request be logged to stdout")
-	docRoot := flag.String("root", ".", "document root directory")
+	noAria := flag.Bool("noaria2", false, "should every proxy request be logged to stdout")
+	docRoot := flag.String("root", "./cache", "document root directory")
 	address := flag.String("http", ":8080", `HTTP service address (e.g., ":8080")`)
 	cacheListFilename := flag.String("cl", "cachelist.txt", "file of regexes to cache request urls")
 	
@@ -61,18 +72,25 @@ func main() {
 		log.Fatalf("Could not load chache list. Error: %s", clErr)
 	}
 
+	err := os.MkdirAll(*docRoot, 0755)
+	if err != nil {
+		log.Fatalf("Could not make cache dir. Error: %s", err)
+	}
+
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = *verbose
 
 	proxy.OnRequest(reqMethodIs("GET", "HEAD")).DoFunc(
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			ctx.Logf("Url: %s", ctx.Req.URL)
+			ctx.Logf("Range : %s",ctx.Req.Header.Get("Range"))
 			
 			ctx.Logf("%s", cacheList)
 
 			for _, cRegex := range cacheList {
 				if cRegex.MatchString(req.URL.String()) {
-					filename := path.Join(*docRoot, ctx.Req.URL.Path)
+					_, urlName := path.Split(ctx.Req.URL.Path)
+					filename := path.Join(*docRoot, urlName)
 					if !exists(filename) {
 			
 						return req, goproxy.NewResponse(req,
@@ -86,13 +104,16 @@ func main() {
 					</html>`))
 					}
 
-					bytes, err := ioutil.ReadFile(filename)
+					//bytes, err := ioutil.ReadFile(filename)
+					file, err := os.Open( filename ) 
+
 					if err != nil {
 						ctx.Warnf("%s", err)
 						return req, nil
 					}
-					resp := goproxy.NewResponse(req, "application/octet-stream",
-						http.StatusOK, string(bytes))
+					stat,_ := file.Stat()
+					resp := goproxy.NewResponseReader(req, "application/octet-stream",
+						http.StatusOK, readCloser{bufio.NewReader(file), file}, stat.Size())
 					ctx.Logf("return response from local %s", filename)
 					return req, resp
 				}
@@ -107,24 +128,29 @@ func main() {
 				if ctx.Req.Method != "GET" || hasRespHeader(ctx.Resp, "Location") {
 					return b
 				}
+				if *noAria {
+					filename := path.Join(*docRoot, ctx.Req.URL.Path)
+					for _, cRegex := range cacheList {
+						if cRegex.MatchString(ctx.Req.URL.String()) {
+							if exists(filename) {
+								return b
+							}
 
-				filename := path.Join(*docRoot, ctx.Req.URL.Path)
-				if exists(filename) {
-					return b
+							dir := path.Dir(filename)
+							err := os.MkdirAll(dir, 0755)
+							if err != nil {
+								ctx.Warnf("cannot create directory: %s", dir)
+							}
+
+							err = ioutil.WriteFile(filename, b, 0644)
+							if err != nil {
+								ctx.Warnf("cannot write file: %s", filename)
+							}
+
+							ctx.Logf("save cache to %s", filename)
+						}
+					}
 				}
-
-				dir := path.Dir(filename)
-				err := os.MkdirAll(dir, 0755)
-				if err != nil {
-					ctx.Warnf("cannot create directory: %s", dir)
-				}
-
-				err = ioutil.WriteFile(filename, b, 0644)
-				if err != nil {
-					ctx.Warnf("cannot write file: %s", filename)
-				}
-
-				ctx.Logf("save cache to %s", filename)
 
 				return b
 			}))
