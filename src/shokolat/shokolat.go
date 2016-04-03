@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"github.com/yazdan/goproxy"
+	"github.com/elazarl/goproxy"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -21,6 +21,12 @@ type readCloser struct {
     io.Reader
     io.Closer
 
+}
+
+type shokolatHttpProxy struct {
+	proxy *goproxy.ProxyHttpServer
+	cachePatterns []*regexp.Regexp
+	docRoot *string
 }
 
 
@@ -56,6 +62,30 @@ func GetRegexlist(filename string) ([]*regexp.Regexp, error) {
 		log.Fatalf("Error reading %s: %q", filename, err)
 	}
 	return list, nil
+}
+
+func (shproxy *shokolatHttpProxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	bServeFile := false
+	filename:= ""
+	if req.Method == "GET" || req.Method == "HEAD" {
+		for _, cRegex := range shproxy.cachePatterns {
+			if cRegex.MatchString(req.URL.String()) {
+				_, urlName := path.Split(req.URL.Path)
+				filename = path.Join(*shproxy.docRoot, urlName)
+				if !exists(filename) {
+						
+				}
+				bServeFile = true
+			}
+		}
+	}
+	
+	if bServeFile {
+		log.Printf("Local hit for %s", req.URL.String())
+		http.ServeFile(w, req, filename)
+	} else {
+		shproxy.proxy.ServeHTTP(w, req)
+	}
 }
 
 func main() {
@@ -154,7 +184,9 @@ func main() {
 
 				return b
 			}))
-	log.Fatal(http.ListenAndServe(*address, proxy))
+	shokolProx := shokolatHttpProxy{proxy, cacheList, docRoot}
+	//log.Fatal(http.ListenAndServe(*address, proxy))
+	log.Fatal(http.ListenAndServe(*address, &shokolProx))
 }
 
 func reqMethodIs(methods ...string) goproxy.ReqConditionFunc {
